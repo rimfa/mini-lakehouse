@@ -16,33 +16,31 @@
 | iceberg-rest | latest | REST Catalog (связывает Trino и PostgreSQL) |
 
 ## Архитектура
-QUERIES
-      Trino SQL · Time Travel · Analytics
-                     │
-                     ▼
-          ┌─────────────────────┐
-          │        TRINO        │  :8080
-          │    (SQL engine)     │
-          └──────────┬──────────┘
-                     │ REST API
-          ┌──────────▼──────────┐
-          │    iceberg-rest     │  :8181
-          │   (REST catalog)    │
-          └──────────┬──────────┘
-                     │ JDBC
-          ┌──────────▼──────────┐
-          │      PostgreSQL     │  :5432
-          │  (catalog metadata) │
-          └─────────────────────┘
 
-          ┌─────────────────────┐
-          │        MinIO        │  :9000 / :9001
-          │   (S3 storage)      │
-          │                     │
-          │  s3://warehouse/    │
-          │  ├── delivery/      │  ← Bronze
-          │  └── gold/          │  ← Gold
-          └─────────────────────┘
+
+QUERIES: Trino SQL · Time Travel · Analytics
++------------------+
+|      TRINO       |  :8080
+|   (SQL engine)   |
++--------+---------+
+|  REST API
++--------+---------+
+|   iceberg-rest   |  :8181
+|  (REST catalog)  |
++--------+---------+
+|  JDBC
++--------+---------+
+|    PostgreSQL    |  :5432
+| (catalog meta)   |
++------------------+
++------------------+
+|      MinIO       |  :9000 / :9001
+|   (S3 storage)   |
+|                  |
+|  s3://warehouse/ |
+|  +-- delivery/   |  <- Bronze
+|  +-- gold/       |  <- Gold
++------------------+
 **Как это работает:**
 1. Trino получает SQL-запрос и обращается к iceberg-rest за метаданными таблиц
 2. iceberg-rest хранит метаданные (схемы, снапшоты, партиции) в PostgreSQL
