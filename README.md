@@ -16,19 +16,17 @@
 | iceberg-rest | latest | REST Catalog (связывает Trino и PostgreSQL) |
 
 ## Архитектура
-
-
 QUERIES: Trino SQL · Time Travel · Analytics
 +------------------+
 |      TRINO       |  :8080
 |   (SQL engine)   |
 +--------+---------+
-|  REST API
+| REST API
 +--------+---------+
 |   iceberg-rest   |  :8181
 |  (REST catalog)  |
 +--------+---------+
-|  JDBC
+| JDBC
 +--------+---------+
 |    PostgreSQL    |  :5432
 | (catalog meta)   |
@@ -115,14 +113,7 @@ docker ps
 docker exec -it trino trino
 ```
 
-Создание схемы:
-
-```sql
-CREATE SCHEMA iceberg.delivery;
-CREATE SCHEMA iceberg.gold;
-```
-
-Аналитика — сводка по заказам:
+Сводка по заказам:
 
 ```sql
 SELECT * FROM iceberg.gold.orders_summary;
