@@ -1,84 +1,115 @@
 # Mini Lakehouse
 
-Локальный mini data lakehouse на Docker: MinIO (S3-хранилище) + PostgreSQL (метакаталог) + Iceberg REST Catalog + Trino (SQL-движок).
+Локальный data lakehouse на Docker для разработки и тестирования аналитических пайплайнов.
+Поднимает production-grade инфраструктуру на локальном компьютере — без облака и платных лицензий.
 
-## Архитектура
-                ┌─────────────┐
-                │    Trino    │  ← SQL-запросы (порт 8080)
-                │ (SQL engine)│
-                └──────┬──────┘
-                       │ REST API
-                ┌──────▼──────┐
-                │ iceberg-rest│  ← каталог Iceberg (порт 8181)
-                └──────┬──────┘
-                       │ JDBC
-                ┌──────▼──────┐
-                │  PostgreSQL │  ← метаданные таблиц (порт 5432)
-                └─────────────┘
-                       
-                ┌─────────────┐
-                │    MinIO    │  ← файлы Parquet (порт 9000/9001)
-                │ (S3 storage)│
-                └─────────────┘
-            
-**Как это работает:**
-1. Trino получает SQL-запрос от пользователя.
-2. Для операций с Iceberg-таблицами Trino обращается к `iceberg-rest` — сервису, реализующему Iceberg REST Catalog Spec.
-3. `iceberg-rest` хранит метаданные о таблицах (схемы, снапшоты, версии) в PostgreSQL через JDBC.
-4. Сами данные (файлы формата Parquet) физически хранятся в MinIO — S3-совместимом объектном хранилище.
+Предметная область: сервис доставки еды по Мытищам.
 
 ## Стек
 
-| Сервис | Образ | Назначение |
+| Компонент | Версия | Назначение |
 |---|---|---|
-| MinIO | `minio/minio:latest` | S3-совместимое хранилище файлов |
-| PostgreSQL | `postgres:15` | Хранение метаданных Iceberg-каталога |
-| iceberg-rest | `tabulario/iceberg-rest:latest` | REST-каталог Iceberg (связывает Trino, PostgreSQL и MinIO) |
-| Trino | `trinodb/trino:latest` | Распределённый SQL-движок |
+| Apache Iceberg | 1.x | ACID table format, Time Travel |
+| Trino | 482 | Распределённый SQL-движок |
+| MinIO | latest | S3-совместимое объектное хранилище |
+| PostgreSQL | 15 | Метаданные Iceberg-каталога |
+| iceberg-rest | latest | REST Catalog (связывает Trino и PostgreSQL) |
+
+## Архитектура
+QUERIES
+      Trino SQL · Time Travel · Analytics
+                     │
+                     ▼
+          ┌─────────────────────┐
+          │        TRINO        │  :8080
+          │    (SQL engine)     │
+          └──────────┬──────────┘
+                     │ REST API
+          ┌──────────▼──────────┐
+          │    iceberg-rest     │  :8181
+          │   (REST catalog)    │
+          └──────────┬──────────┘
+                     │ JDBC
+          ┌──────────▼──────────┐
+          │      PostgreSQL     │  :5432
+          │  (catalog metadata) │
+          └─────────────────────┘
+
+          ┌─────────────────────┐
+          │        MinIO        │  :9000 / :9001
+          │   (S3 storage)      │
+          │                     │
+          │  s3://warehouse/    │
+          │  ├── delivery/      │  ← Bronze
+          │  └── gold/          │  ← Gold
+          └─────────────────────┘
+**Как это работает:**
+1. Trino получает SQL-запрос и обращается к iceberg-rest за метаданными таблиц
+2. iceberg-rest хранит метаданные (схемы, снапшоты, партиции) в PostgreSQL
+3. Trino читает Parquet-файлы напрямую из MinIO по S3 API
+
+**Почему iceberg-rest вместо прямого JDBC:**
+В Trino 482 есть баг — при прямом JDBC-подключении к Iceberg служебные таблицы каталога не создаются автоматически ([issue #20419](https://github.com/trinodb/trino/issues/20419)). REST-каталог решает эту проблему и является более современным стандартом.
 
 ## Порты
 
 | Сервис | Порт | UI |
 |---|---|---|
 | MinIO API | 9000 | — |
-| MinIO Console | 9001 | http://localhost:9001 (admin / password123) |
+| MinIO Console | 9001 | http://localhost:9001 |
 | PostgreSQL | 5432 | — |
 | iceberg-rest | 8181 | — |
 | Trino | 8080 | http://localhost:8080 |
 
-## Запуск
+MinIO: `admin` / `password123`
+
+## Быстрый старт
 
 ```bash
-git clone <ссылка-на-репозиторий>
+git clone https://github.com/rimfa/mini-lakehouse
 cd mini-lakehouse
 docker-compose up -d
 ```
 
-Проверить, что все сервисы работают:
+Проверить что все сервисы запущены:
 
 ```bash
 docker ps
 ```
 
-Все 4 контейнера должны быть в статусе `Up`.
+Должно быть 4 контейнера в статусе `Up`: minio, postgres, iceberg-rest, trino.
 
-## Проверка работы (health-check)
+**Важно:** перед первым запуском создай bucket в MinIO Console (http://localhost:9001) с именем `warehouse`.
 
-```bash
-# MinIO
-curl http://localhost:9000/minio/health/live
+## Данные
 
-# iceberg-rest
-docker logs iceberg-rest --tail 20
+### Структура слоёв
 
-# Trino (должно быть SERVER STARTED в логах)
-docker logs trino --tail 20
+**Bronze** (`iceberg.delivery`) — операционные данные:
 
-# PostgreSQL
-docker exec -it postgres psql -U iceberg -d iceberg_catalog -c "\dt"
-```
+| Таблица | Описание | Партиция |
+|---|---|---|
+| `orders` | Заказы | day(created_at) |
+| `couriers` | Курьеры | — |
+| `order_status_history` | История статусов | day(changed_at) |
 
-## Пример работы с данными
+**Gold** (`iceberg.gold`) — аналитические витрины:
+
+| Таблица | Описание |
+|---|---|
+| `orders_summary` | Количество и сумма заказов по статусам |
+| `courier_workload` | Загруженность курьеров |
+| `delivery_time` | Среднее время доставки по ресторанам |
+
+### SQL-скрипты
+
+| Файл | Описание |
+|---|---|
+| `sql/01_create_tables.sql` | Создание схем и таблиц |
+| `sql/02_insert_data.sql` | Загрузка тестовых данных |
+| `sql/03_analytics.sql` | Gold-витрины и аналитические запросы |
+
+## Работа с данными
 
 Подключение к Trino:
 
@@ -86,54 +117,66 @@ docker exec -it postgres psql -U iceberg -d iceberg_catalog -c "\dt"
 docker exec -it trino trino
 ```
 
-Создание схемы и таблицы:
+Создание схемы:
 
 ```sql
-CREATE SCHEMA iceberg.warehouse;
-
-CREATE TABLE iceberg.warehouse.orders (
-    order_id BIGINT,
-    customer_name VARCHAR,
-    amount DECIMAL(10,2),
-    order_date DATE
-) WITH (format = 'PARQUET');
+CREATE SCHEMA iceberg.delivery;
+CREATE SCHEMA iceberg.gold;
 ```
 
-Вставка и выборка данных:
+Аналитика — сводка по заказам:
 
 ```sql
-INSERT INTO iceberg.warehouse.orders VALUES
-    (1, 'Иван Иванов', 1500.50, DATE '2026-07-01');
-
-SELECT * FROM iceberg.warehouse.orders;
+SELECT * FROM iceberg.gold.orders_summary;
 ```
 
-JOIN двух таблиц:
+Загруженность курьеров:
 
 ```sql
-SELECT o.order_id, o.customer_name, o.amount, s.status
-FROM iceberg.warehouse.orders o
-JOIN iceberg.warehouse.order_status s ON o.order_id = s.order_id;
+SELECT * FROM iceberg.gold.courier_workload;
 ```
 
-Time Travel — просмотр состояния таблицы в прошлом:
+Среднее время доставки:
 
 ```sql
--- список версий (снапшотов) таблицы
-SELECT * FROM iceberg.warehouse."orders$snapshots";
+SELECT * FROM iceberg.gold.delivery_time;
+```
+
+JOIN заказов с курьерами:
+
+```sql
+SELECT o.order_id, o.customer_name, o.status,
+       c.full_name AS courier, o.amount
+FROM iceberg.delivery.orders o
+JOIN iceberg.delivery.order_status_history h ON o.order_id = h.order_id
+JOIN iceberg.delivery.couriers c ON h.courier_id = c.courier_id
+WHERE h.status = 'доставлен'
+GROUP BY o.order_id, o.customer_name, o.status, c.full_name, o.amount;
+```
+
+Time Travel:
+
+```sql
+-- список снапшотов
+SELECT snapshot_id, committed_at, operation
+FROM iceberg.delivery."orders$snapshots";
 
 -- состояние на конкретный снапшот
-SELECT * FROM iceberg.warehouse.orders FOR VERSION AS OF <snapshot_id>;
-
--- состояние на конкретный момент времени
-SELECT * FROM iceberg.warehouse.orders FOR TIMESTAMP AS OF TIMESTAMP '2026-07-14 09:39:49 UTC';
+SELECT * FROM iceberg.delivery.orders FOR VERSION AS OF <snapshot_id>;
 ```
 
-## Известные нюансы
+## Health-check
 
-- В используемой версии Trino (482) есть баг с автоматическим созданием служебных таблиц при прямом JDBC-подключении к Iceberg (см. [trinodb/trino#20419](https://github.com/trinodb/trino/issues/20419)). Поэтому вместо `iceberg.catalog.type=jdbc` используется `iceberg.catalog.type=rest` через отдельный сервис `iceberg-rest`, который не подвержен этому багу.
-- Bucket `warehouse` в MinIO нужно создать вручную перед первым `CREATE TABLE` (автоматическое создание bucket в текущей связке REST-каталога не работает).
+```bash
+# MinIO
+curl http://localhost:9000/minio/health/live
 
-## Автор
+# Trino
+docker logs trino --tail 20
 
-[]
+# iceberg-rest
+docker logs iceberg-rest --tail 20
+
+# PostgreSQL
+docker exec -it postgres psql -U iceberg -d iceberg_catalog -c "\dt"
+```
