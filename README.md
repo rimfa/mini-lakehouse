@@ -16,6 +16,7 @@
 | iceberg-rest | latest | REST Catalog (связывает Trino и PostgreSQL) |
 
 ## Архитектура
+```
 QUERIES: Trino SQL · Time Travel · Analytics
 +------------------+
 |      TRINO       |  :8080
@@ -39,6 +40,7 @@ QUERIES: Trino SQL · Time Travel · Analytics
 |  +-- delivery/   |  <- Bronze
 |  +-- gold/       |  <- Gold
 +------------------+
+```
 **Как это работает:**
 1. Trino получает SQL-запрос и обращается к iceberg-rest за метаданными таблиц
 2. iceberg-rest хранит метаданные (схемы, снапшоты, партиции) в PostgreSQL
